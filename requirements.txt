@@ -1,0 +1,12 @@
+transformers>=4.41.0
+sentence-transformers>=3.0.0
+scikit-learn>=1.4.0
+numpy>=1.26.0
+torch
+huggingface_hub
+soundfile
+librosa
+torchaudio
+optimum[openvino]
+openvino
+datasets

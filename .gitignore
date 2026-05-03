@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+env/
+.env
+
+# Project specific
+scratch/
+benchmark_results/
+*.csv
+*.txt
+!requirements.txt
+!README.md
+
+# IDEs
+.vscode/
+.idea/
