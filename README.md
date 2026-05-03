@@ -48,4 +48,4 @@ BeeConsensus operates in three distinct phases:
 3. **Consensus**: The framework selects the most dominant and cohesive cluster to formulate the final truthful response.
 
 ---
-*Created with 🐝 by [Your Name]*
+*Created with 🐝 by [Khaled Walid]*
