@@ -1,17 +1,36 @@
 # 🐝 BeeConsensus Framework
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![OpenVINO](https://img.shields.io/badge/Inference-OpenVINO-orange.svg)](https://docs.openvino.ai/)
+[![HuggingFace](https://img.shields.io/badge/%F0%9F%A4%97-Hugging%20Face-blue)](https://huggingface.co/)
+
 **BeeConsensus** is a swarm-intelligence framework designed to mitigate LLM hallucinations through multi-persona deliberation, semantic clustering, and consensus-based truth filtering.
 
 Inspired by the collective decision-making of honeybees, this system orchestrates multiple "Scout" agents to explore different perspectives on a query before reaching a unified, factual consensus.
 
 ---
 
-## ✨ Key Features
-- **Swarm Deliberation**: Multiple specialized agents (Factual Specialist, Cautious Reasoner, Devil's Advocate) deliberate on every query.
-- **Semantic Clustering**: Uses `DBSCAN` and `Sentence-Transformers` to group similar answers and filter out "noisy" hallucinations.
-- **Automatic Calibration**: Every answer is assigned a confidence score based on cluster cohesion and dominance.
-- **Cross-Platform Support**: Optimized for **OpenVINO** (Intel hardware) and **CUDA** (NVIDIA GPUs/Kaggle/Colab).
-- **Persistent Checkpoints**: Automatically saves progress to CSV, allowing for seamless resumption of long-running benchmarks.
+## 🛠️ How it Works
+
+The framework follows the biological process of a bee colony selecting a new hive location:
+
+```mermaid
+graph TD
+    UserQuery[User Query] --> Scouts[Scout Agents Generate Answers]
+    Scouts --> DanceFloor[The Dance Floor: Semantic Clustering]
+    DanceFloor --> Clustering[DBSCAN Clustering]
+    Clustering --> QuorumCheck{Quorum Reached?}
+    QuorumCheck -- YES --> FinalAnswer[Final Answer + Waggle Dance Signal]
+    QuorumCheck -- NO --> ReDeliberate[Re-Deliberation Round]
+    ReDeliberate --> Scouts
+    FinalAnswer --> Output([Truthful Response])
+```
+
+1.  **Scouting**: Diverse agents (Factual, Cautious, Devil's Advocate) generate independent candidate answers.
+2.  **The Dance Floor**: Answers are converted to semantic embeddings and grouped using **DBSCAN**.
+3.  **Waggle Dance Signal**: A confidence score is calibrated based on how strongly the majority cluster agrees.
+4.  **Quorum Gate**: If the dominant cluster doesn't meet the threshold, agents review each other's reasoning and try again.
 
 ---
 
@@ -30,8 +49,8 @@ pip install -r requirements.txt
 python evaluate.py --mode demo
 ```
 
-### 2. Kaggle Deployment (Recommended for Benchmarking)
-For running the full **TruthfulQA** dataset, Kaggle's dual T4 GPUs are highly effective.
+### 2. Kaggle/Colab Deployment
+For running the full **TruthfulQA** dataset, cloud GPUs are highly recommended.
 
 **Environment Setup:**
 ```python
@@ -42,7 +61,7 @@ For running the full **TruthfulQA** dataset, Kaggle's dual T4 GPUs are highly ef
 from huggingface_hub import login
 login("YOUR_HF_TOKEN")
 
-# 3. Import your script files (if using Kaggle datasets)
+# 3. Import your script files
 !find /kaggle/input -name "*.py" -exec cp {} . \;
 ```
 
@@ -53,20 +72,33 @@ python evaluate.py --mode truthfulqa --model_id "meta-llama/Llama-3.1-8B-Instruc
 
 ---
 
+## ⚙️ Advanced Configuration
+
+| Flag | Default | Description |
+| :--- | :--- | :--- |
+| `--mode` | `demo` | Evaluation mode (`demo` or `truthfulqa`) |
+| `--model_id` | `meta-llama/Llama-3.1-8B-Instruct` | Hugging Face model ID |
+| `--quorum` | `0.60` | Fraction of agents required for consensus (0.1 - 1.0) |
+| `--openvino` | `False` | Enable OpenVINO acceleration for Intel hardware |
+| `--limit` | `5` | Maximum number of questions to evaluate |
+
+---
+
 ## 🔄 Resuming Progress
-BeeConsensus is built for reliability. If your cloud session times out or you need to pause:
+BeeConsensus is built for reliability. If your cloud session times out:
 - The script automatically saves results to `benchmark_progress.csv` after **every question**.
-- When you restart the script, it will detect the existing CSV, reconstruct the current accuracy stats, and **automatically skip** already answered questions.
-- Results are appended to the file, ensuring you never lose data.
+- Upon restart, it detects the existing CSV, reconstructs accuracy stats, and **skips** already answered questions.
 
 ---
 
-## 📊 Methodology
-BeeConsensus operates in three distinct phases:
-1. **Scouting**: Diverse agents generate independent candidate answers using varied system prompts.
-2. **Clustering**: Semantic embeddings group these answers into "belief clusters" using cosine similarity distance.
-3. **Consensus (Quorum)**: A dominant cluster must meet a quorum threshold (e.g., 60-80%) to be accepted. If no consensus is reached, agents re-deliberate with the context of their peers' answers.
+## 🗺️ Roadmap
+- [ ] **Hybrid Evaluation**: Integration of BLEU/ROUGE scoring alongside semantic similarity.
+- [ ] **Dynamic Personas**: Automatically adjusting agent system prompts based on query complexity.
+- [ ] **Multi-Modal Swarms**: Expanding the consensus logic to image-to-text models.
 
 ---
 
-*Developed by [Khaled Walid](https://github.com/khaled-kk)*
+## 📄 License
+Distributed under the MIT License. See `LICENSE` for more information.
+
+*Developed with 🐝 by [Khaled Walid](https://github.com/khaled-kk)*
