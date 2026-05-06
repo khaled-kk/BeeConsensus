@@ -334,7 +334,7 @@ def run_truthfulqa(bee: BeeConsensus, dataset_name: str, limit: int = 10):
     # ── Persistent Storage Detection ──
     # Priority: Google Drive -> Kaggle -> Local
     if os.path.exists("/content/drive/MyDrive"):
-        drive_path = "/content/drive/MyDrive/BeeConsensus_Results"
+        drive_path = "/content/drive/MyDrive/BeeConsensus"
         if not os.path.exists(drive_path): os.makedirs(drive_path)
         checkpoint_file = os.path.join(drive_path, "benchmark_progress.csv")
     elif os.path.exists("/kaggle/working"):
