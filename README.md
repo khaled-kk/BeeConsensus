@@ -107,6 +107,25 @@ BeeConsensus is built for reliability. If your cloud session times out:
 
 ---
 
+## 📊 Insights & Visualization
+
+BeeConsensus includes a dedicated visualization suite to analyze swarm performance and confidence calibration.
+
+### 1. Generate Plots
+If you have `pandas` and `matplotlib` installed, you can generate performance charts from your latest benchmark results:
+
+```bash
+python visualize_results.py
+```
+
+### 2. Analysis Overview
+The script generates three key insights in the `plots/` directory:
+- **Running Accuracy**: Tracks how the swarm stabilizes performance compared to baselines over hundreds of queries.
+- **Latency Distribution**: A comparative boxplot showing the inference efficiency of BeeConsensus vs. Self-Consistency.
+- **Confidence Calibration**: Analyzes the "Waggle Dance" signal to correlate agent confidence with factual correctness.
+
+---
+
 ## 🗺️ Roadmap
 - [ ] **Hybrid Evaluation**: Integration of BLEU/ROUGE scoring alongside semantic similarity.
 - [ ] **Dynamic Personas**: Automatically adjusting agent system prompts based on query complexity.
