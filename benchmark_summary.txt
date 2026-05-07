@@ -1,0 +1,12 @@
+
+============================================================
+  SUMMARY (TruthfulQA) - Persistent Report
+============================================================
+  Questions Processed: 817
+  Method                   Accuracy    Avg Latency   Avg Conf
+------------------------------------------------------------
+  single_llm                  44.2%       16019 ms      N/A 
+  self_consistency            43.2%       79781 ms      N/A 
+  beeconsensus                48.2%       50819 ms     0.662
+
+  Evaluation complete.
