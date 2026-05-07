@@ -75,10 +75,35 @@ def generate_visualizations(csv_path="benchmark_progress.csv", output_dir="plots
     plt.savefig(os.path.join(output_dir, 'confidence_analysis.png'), dpi=300)
     plt.close()
 
-    print(f"\nSuccess! 3 visualizations saved to the '{output_dir}/' directory.")
+    # --- 4. Final Accuracy Bar Chart ---
+    print("Generating Accuracy Comparison bar chart...")
+    plt.figure(figsize=(10, 6))
+    
+    accuracies = [df['Single_Cum_Acc'].iloc[-1], df['SC_Cum_Acc'].iloc[-1], df['Bee_Cum_Acc'].iloc[-1]]
+    labels = ['Single LLM', 'Self-Consistency', 'BeeConsensus']
+    colors = ['#4169E1', '#999999', '#FFD700']
+    
+    bars = plt.bar(labels, accuracies, color=colors, alpha=0.8, edgecolor='black', linewidth=1)
+    
+    # Add percentage labels on top of bars
+    for bar in bars:
+        yval = bar.get_height()
+        plt.text(bar.get_x() + bar.get_width()/2, yval + 0.5, f'{yval:.1f}%', 
+                 ha='center', va='bottom', fontsize=12, fontweight='bold')
+
+    plt.title('Final Accuracy Comparison (TruthfulQA)', fontsize=16, fontweight='bold')
+    plt.ylabel('Accuracy (%)', fontsize=12)
+    plt.ylim(0, max(accuracies) + 10)
+    plt.grid(axis='y', linestyle='--', alpha=0.7)
+    
+    plt.savefig(os.path.join(output_dir, 'accuracy_comparison.png'), dpi=300)
+    plt.close()
+
+    print(f"\nSuccess! 4 visualizations saved to the '{output_dir}/' directory.")
     print("1. running_accuracy.png")
     print("2. latency_distribution.png")
     print("3. confidence_analysis.png")
+    print("4. accuracy_comparison.png")
 
 if __name__ == "__main__":
     generate_visualizations()
