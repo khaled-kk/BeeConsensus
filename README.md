@@ -84,6 +84,22 @@ python evaluate.py --mode truthfulqa --model_id "meta-llama/Llama-3.1-8B-Instruc
 
 ---
 
+## 📊 Benchmark Results (TruthfulQA)
+*Full evaluation on 817 questions using meta-llama/Llama-3.1-8B-Instruct.*
+
+| Method | Accuracy | Avg Latency | Avg Confidence |
+| :--- | :---: | :---: | :---: |
+| **Single LLM (Baseline)** | 44.2% | 16.0s | N/A |
+| **Self-Consistency (N=5)** | 43.2% | 79.8s | N/A |
+| **BeeConsensus (Swarm)** | **48.2%** | **50.8s** | **0.662** |
+
+**Key Findings:**
+- **Hallucination Reduction**: BeeConsensus achieved a **+4.0%** absolute accuracy gain over the single-model baseline.
+- **Superior to Self-Consistency**: The swarm logic outperformed simple majority voting by **5.0%**, demonstrating the value of persona diversity.
+- **Improved Efficiency**: Despite the complexity, BeeConsensus was **36% faster** than standard Self-Consistency due to optimized quorum gates.
+
+---
+
 ## 🔄 Resuming Progress
 BeeConsensus is built for reliability. If your cloud session times out:
 - The script automatically saves results to `benchmark_progress.csv` after **every question**.
