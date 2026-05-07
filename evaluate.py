@@ -2,6 +2,7 @@ import os
 import json
 import argparse
 import time
+import csv
 from statistics import mean, stdev
 from datasets import load_dataset
 
@@ -80,7 +81,6 @@ DEMO_QUESTIONS = [
 def universal_chat(model_obj, tokenizer, processor, msgs, max_new_tokens=256, sampling=True, temperature=0.3):
     """A helper to handle both .chat() (MiniCPM) and .generate() (OpenVINO/Standard Llama)."""
     if hasattr(model_obj, "chat"):
-        # MiniCPM style
         return model_obj.chat(
             msgs=msgs,
             tokenizer=tokenizer,
@@ -90,7 +90,6 @@ def universal_chat(model_obj, tokenizer, processor, msgs, max_new_tokens=256, sa
             temperature=temperature,
         )
     else:
-        # OpenVINO or Standard Transformers
         if hasattr(tokenizer, "apply_chat_template"):
             encoded = tokenizer.apply_chat_template(
                 msgs, 
@@ -99,11 +98,9 @@ def universal_chat(model_obj, tokenizer, processor, msgs, max_new_tokens=256, sa
                 return_dict=True
             ).to(model_obj.device)
         else:
-            # Fallback
             prompt = "\n".join([f"{m['role']}: {m['content']}" for m in msgs]) + "\nassistant: "
             encoded = tokenizer(prompt, return_tensors="pt").to(model_obj.device)
         
-        # Ensure we are passing tensors to generate
         input_ids = encoded.input_ids if hasattr(encoded, "input_ids") else encoded
         attention_mask = encoded.get("attention_mask") if isinstance(encoded, dict) else getattr(encoded, "attention_mask", None)
 
@@ -111,24 +108,18 @@ def universal_chat(model_obj, tokenizer, processor, msgs, max_new_tokens=256, sa
             "input_ids": input_ids,
             "max_new_tokens": max_new_tokens,
             "do_sample": sampling,
-            "temperature": temperature if sampling else None,
+            "temperature": temperature,
             "pad_token_id": tokenizer.eos_token_id
         }
         if attention_mask is not None:
             gen_kwargs["attention_mask"] = attention_mask
 
         output_ids = model_obj.generate(**gen_kwargs)
-        
-        # Decode only the new tokens
         return tokenizer.decode(
             output_ids[0][input_ids.shape[-1]:], 
             skip_special_tokens=True
         ).strip()
 
-
-# ─────────────────────────────────────────────
-#  Baseline: Single LLM (Local)
-# ─────────────────────────────────────────────
 
 def single_llm_query(model_obj, tokenizer, processor, question: str) -> dict:
     t0 = time.time()
@@ -136,31 +127,12 @@ def single_llm_query(model_obj, tokenizer, processor, question: str) -> dict:
         {"role": "system", "content": "You are a helpful, accurate assistant."},
         {"role": "user",   "content": question},
     ]
-    
     with torch.no_grad():
-        answer = universal_chat(
-            model_obj, tokenizer, processor, 
-            msgs=msgs,
-            max_new_tokens=256,
-            sampling=True,
-            temperature=0.05,
-        )
-        
-    latency = (time.time() - t0) * 1000
-    return {
-        "answer":      answer.strip(),
-        "latency_ms":  latency,
-        "method":      "single_llm",
-    }
+        answer = universal_chat(model_obj, tokenizer, processor, msgs=msgs, temperature=0.05)
+    return {"answer": answer.strip(), "latency_ms": (time.time() - t0) * 1000, "method": "single_llm"}
 
 
-# ─────────────────────────────────────────────
-#  Baseline: Self-consistency (N samples, majority) (Local)
-# ─────────────────────────────────────────────
-
-def self_consistency_query(
-    model_obj, tokenizer, processor, question: str, n: int = 5
-) -> dict:
+def self_consistency_query(model_obj, tokenizer, processor, question: str, n: int = 5) -> dict:
     answers = []
     t0 = time.time()
     for _ in range(n):
@@ -169,43 +141,17 @@ def self_consistency_query(
             {"role": "user",   "content": question},
         ]
         with torch.no_grad():
-            ans = universal_chat(
-                model_obj, tokenizer, processor,
-                msgs=msgs,
-                max_new_tokens=256,
-                sampling=True,
-                temperature=0.05,
-            )
+            ans = universal_chat(model_obj, tokenizer, processor, msgs=msgs, temperature=0.05)
         answers.append(ans.strip())
-
-    latency = (time.time() - t0) * 1000
-
-    # Majority vote by exact match (simplified)
-    from collections import Counter
-    majority = Counter(answers).most_common(1)[0][0]
-
-    return {
-        "answer":     majority,
-        "latency_ms": latency,
-        "method":     "self_consistency",
-        "all_answers": answers,
-    }
+    return {"answer": max(set(answers), key=answers.count), "latency_ms": (time.time() - t0) * 1000, "method": "self_consistency"}
 
 
-# ─────────────────────────────────────────────
-#  Evaluation helpers
-# ─────────────────────────────────────────────
-
-def check_correctness(answer: str, gold: str, correct_list: list, encoder=None) -> bool:
+def check_correctness(answer, gold, correct_list, encoder=None):
     """Hybrid match: Exact substring match OR Cosine Similarity > 0.75."""
     targets = [gold] + [c for c in correct_list if c]
-    
-    # 1. Exact Substring Match
     for t in targets:
         if t.lower() in answer.lower():
             return True
-            
-    # 2. Semantic Similarity Match
     if encoder is not None and targets:
         from sklearn.metrics.pairwise import cosine_similarity
         gen_emb = encoder.encode([answer])
@@ -213,7 +159,6 @@ def check_correctness(answer: str, gold: str, correct_list: list, encoder=None) 
         sims = cosine_similarity(gen_emb, tgt_emb)
         if sims.max() >= 0.75:
             return True
-            
     return False
 
 
@@ -225,133 +170,44 @@ def print_result_row(method: str, answer: str, gold: str, latency: float, confid
     correct = "✓" if is_correct else "✗"
     conf_str = f"  conf={confidence:.2f}" if confidence is not None else ""
     print(f"  [{correct}] {method:<22} {latency:>7.0f}ms{conf_str}")
-    # Show more of the answer for TruthfulQA debugging
     print(f"       Answer: {answer[:120]}{'...' if len(answer) > 120 else ''}")
 
 
 # ─────────────────────────────────────────────
-#  Demo mode
+#  Storage & Persistence Helpers
 # ─────────────────────────────────────────────
 
-def run_demo(bee: BeeConsensus):
-    print("\n" + "="*60)
-    print("  BeeConsensus — Demo Evaluation (Local Model)")
-    print("  5 questions | 3 methods compared")
-    print("="*60)
-
-    results = {
-        "single_llm":        {"correct": 0, "latency": []},
-        "self_consistency":  {"correct": 0, "latency": []},
-        "beeconsensus":      {"correct": 0, "latency": [], "confidence": []},
-    }
-
-    model_obj = bee.model
-    tokenizer = bee.tokenizer
-    processor = bee.processor
-
-    for i, item in enumerate(DEMO_QUESTIONS[:10], 1):
-        q    = item["question"]
-        gold = item["gold_answer"]
-
-        print(f"\nQ{i}: {q}")
-        print(f"     Gold answer: {gold}  |  Common hallucination: {item['common_hallucination']}")
-        print_separator()
-
-        # Baseline 1 — single LLM
-        r1 = single_llm_query(model_obj, tokenizer, processor, q)
-        is_correct = check_correctness(r1["answer"], gold, [], bee.encoder)
-        results["single_llm"]["correct"] += int(is_correct)
-        results["single_llm"]["latency"].append(r1["latency_ms"])
-        print_result_row("Single LLM", r1["answer"], gold, r1["latency_ms"], is_correct=is_correct)
-
-        # Baseline 2 — self-consistency
-        r2 = self_consistency_query(model_obj, tokenizer, processor, q, n=len(bee.personas))
-        is_correct = check_correctness(r2["answer"], gold, [], bee.encoder)
-        results["self_consistency"]["correct"] += int(is_correct)
-        results["self_consistency"]["latency"].append(r2["latency_ms"])
-        print_result_row("Self-consistency", r2["answer"], gold, r2["latency_ms"], is_correct=is_correct)
-
-        # BeeConsensus
-        t0  = time.time()
-        res = bee.query(q)
-        elapsed = (time.time() - t0) * 1000
-        is_correct = check_correctness(res.final_answer, gold, [], bee.encoder)
-        results["beeconsensus"]["correct"] += int(is_correct)
-        results["beeconsensus"]["latency"].append(elapsed)
-        results["beeconsensus"]["confidence"].append(res.confidence_score)
-        print_result_row(
-            f"BeeConsensus (r={res.rounds})",
-            res.final_answer, gold, elapsed,
-            confidence=res.confidence_score,
-            is_correct=is_correct,
-        )
-        if res.flagged_for_review:
-            print("       ⚠ Flagged for human review (low confidence)")
-
-    # Summary
-    n = len(DEMO_QUESTIONS)
-    print("\n" + "="*60)
-    print("  SUMMARY")
-    print("="*60)
-    print(f"  {'Method':<22} {'Accuracy':>10} {'Avg Latency':>14} {'Avg Conf':>10}")
-    print_separator()
-    for method, data in results.items():
-        acc     = data["correct"] / n * 100
-        avg_lat = mean(data["latency"])
-        conf_str = f"{mean(data['confidence']):.3f}" if data.get("confidence") else "  N/A "
-        print(f"  {method:<22} {acc:>9.1f}%  {avg_lat:>10.0f} ms  {conf_str:>8}")
-
-    print("\n  Done.\n")
-    return results
-
-
-def run_truthfulqa(bee: BeeConsensus, dataset_name: str, limit: int = 10):
-    print("\n" + "="*60)
-    print(f"  BeeConsensus — TruthfulQA Evaluation")
-    print(f"  Dataset: {dataset_name} | Limit: {limit}")
-    print("="*60)
-
-    try:
-        ds = load_dataset(dataset_name, "generation", split="train")
-    except Exception as e:
-        print(f"Error loading dataset: {e}")
-        # Fallback for some versions of the dataset
-        ds = load_dataset(dataset_name, split="train")
-
-    if limit and limit < len(ds):
-        ds = ds.select(range(limit))
-
-    results = {
-        "single_llm":        {"correct": 0, "latency": []},
-        "self_consistency":  {"correct": 0, "latency": []},
-        "beeconsensus":      {"correct": 0, "latency": [], "confidence": []},
-    }
-
-    model_obj = bee.model
-    tokenizer = bee.tokenizer
-    processor = getattr(bee, "processor", None)
-    
-    # ── Persistent Storage Detection ──
-    # Priority: Google Drive -> Kaggle -> Local
+def get_storage_paths():
+    """Determine where to save progress and summaries based on environment."""
     if os.path.exists("/content/drive/MyDrive"):
         drive_path = "/content/drive/MyDrive/BeeConsensus"
         if not os.path.exists(drive_path): os.makedirs(drive_path)
         checkpoint_file = os.path.join(drive_path, "benchmark_progress.csv")
+        summary_file = os.path.join(drive_path, "benchmark_summary.txt")
     elif os.path.exists("/kaggle/working"):
-        checkpoint_file = "/kaggle/working/benchmark_progress.csv"
+        drive_path = "/kaggle/working"
+        checkpoint_file = os.path.join(drive_path, "benchmark_progress.csv")
+        summary_file = os.path.join(drive_path, "benchmark_summary.txt")
     else:
+        drive_path = "."
         checkpoint_file = "benchmark_progress.csv"
-    
-    # 1. Load existing progress if any
+        summary_file = "benchmark_summary.txt"
+    return checkpoint_file, summary_file
+
+
+def load_checkpoint_results(checkpoint_file):
+    """Load results dictionary from a CSV checkpoint."""
+    results = {
+        "single_llm":        {"correct": 0, "latency": []},
+        "self_consistency":  {"correct": 0, "latency": []},
+        "beeconsensus":      {"correct": 0, "latency": [], "confidence": []},
+    }
     processed_questions = set()
     if os.path.exists(checkpoint_file):
         try:
             import pandas as pd
             df_check = pd.read_csv(checkpoint_file)
             processed_questions = set(df_check["Question"].tolist())
-            print(f"\n[INFO] Found checkpoint! {len(processed_questions)} questions already answered. Resuming...")
-            
-            # Reconstruct current stats from the CSV
             for _, row in df_check.iterrows():
                 if "Single LLM Correct" in row:
                     results["single_llm"]["correct"] += int(row["Single LLM Correct"])
@@ -364,128 +220,150 @@ def run_truthfulqa(bee: BeeConsensus, dataset_name: str, limit: int = 10):
                     results["beeconsensus"]["latency"].append(row["BeeConsensus Latency"])
                     results["beeconsensus"]["confidence"].append(row["BeeConsensus Confidence"])
         except Exception as e:
-            print(f"[WARNING] Could not load checkpoint: {e}. Starting fresh.")
+            print(f"[WARNING] Could not load checkpoint: {e}")
+    return results, processed_questions
+
+
+def print_and_save_summary(results, summary_file):
+    """Calculate, print, and save the final evaluation report."""
+    processed_count = len(results["beeconsensus"]["latency"])
+    summary_lines = [
+        "\n" + "="*60,
+        f"  SUMMARY (TruthfulQA) - Persistent Report",
+        "="*60,
+        f"  Questions Processed: {processed_count}",
+        f"  {'Method':<22} {'Accuracy':>10} {'Avg Latency':>14} {'Avg Conf':>10}",
+        "-" * 60
+    ]
+    for method, data in results.items():
+        acc     = (data["correct"] / processed_count * 100) if processed_count > 0 else 0
+        avg_lat = mean(data["latency"]) if data["latency"] else 0
+        conf_str = f"{mean(data['confidence']):.3f}" if data.get("confidence") else "  N/A "
+        summary_lines.append(f"  {method:<22} {acc:>9.1f}%  {avg_lat:>10.0f} ms  {conf_str:>8}")
+    summary_lines.append("\n  Evaluation complete.\n")
+    summary_text = "\n".join(summary_lines)
+    print(summary_text)
+    try:
+        with open(summary_file, "w", encoding="utf-8") as f:
+            f.write(summary_text)
+        print(f"[INFO] Final results saved to: {summary_file}")
+    except Exception as e:
+        print(f"[ERROR] Could not save summary file: {e}")
+    return summary_text
+
+
+# ─────────────────────────────────────────────
+#  Evaluation Modes
+# ─────────────────────────────────────────────
+
+def run_demo(bee: BeeConsensus):
+    print("\n" + "="*60)
+    print("  BeeConsensus — Demo Evaluation (Local Model)")
+    print("="*60)
+    results = {"single_llm": {"correct": 0, "latency": []}, "self_consistency": {"correct": 0, "latency": []}, "beeconsensus": {"correct": 0, "latency": [], "confidence": []}}
+    for i, item in enumerate(DEMO_QUESTIONS[:10], 1):
+        q, gold = item["question"], item["gold_answer"]
+        print(f"\nQ{i}: {q}")
+        r1 = single_llm_query(bee.model, bee.tokenizer, bee.processor, q)
+        results["single_llm"]["correct"] += int(check_correctness(r1["answer"], gold, [], bee.encoder))
+        r2 = self_consistency_query(bee.model, bee.tokenizer, bee.processor, q, n=len(bee.personas))
+        results["self_consistency"]["correct"] += int(check_correctness(r2["answer"], gold, [], bee.encoder))
+        t0 = time.time()
+        res = bee.query(q)
+        results["beeconsensus"]["correct"] += int(check_correctness(res.final_answer, gold, [], bee.encoder))
+        results["beeconsensus"]["latency"].append((time.time() - t0) * 1000)
+        results["beeconsensus"]["confidence"].append(res.confidence_score)
+    print_and_save_summary(results, "demo_summary.txt")
+
+
+def run_truthfulqa(bee: BeeConsensus, dataset_name: str, limit: int = 10):
+    print("\n" + "="*60)
+    print(f"  BeeConsensus — TruthfulQA Evaluation")
+    print(f"  Dataset: {dataset_name} | Limit: {limit}")
+    print("="*60)
+
+    try:
+        ds = load_dataset(dataset_name, "generation", split="train")
+    except:
+        ds = load_dataset(dataset_name, split="train")
+
+    if limit and limit < len(ds):
+        ds = ds.select(range(limit))
+
+    checkpoint_file, summary_file = get_storage_paths()
+    results, processed_questions = load_checkpoint_results(checkpoint_file)
+    
+    model_obj, tokenizer, processor = bee.model, bee.tokenizer, getattr(bee, "processor", None)
 
     for i, item in enumerate(ds, 1):
-        q    = item["Question"]
-        gold = item["Best Answer"]
-        
+        q, gold = item["Question"], item["Best Answer"]
         if q in processed_questions:
             continue
             
-        # Also include other correct answers for looser matching
         correct_list = item.get("Correct Answers", "").split(";")
-        
         print(f"\nQ{i}: {q}")
-        print(f"     Target: {gold}")
-        print_separator()
-
-        # Baseline 1 — single LLM
+        
         r1 = single_llm_query(model_obj, tokenizer, processor, q)
-        is_correct = check_correctness(r1["answer"], gold, correct_list, bee.encoder)
-        results["single_llm"]["correct"] += int(is_correct)
+        is_c1 = check_correctness(r1["answer"], gold, correct_list, bee.encoder)
+        results["single_llm"]["correct"] += int(is_c1)
         results["single_llm"]["latency"].append(r1["latency_ms"])
-        print_result_row("Single LLM", r1["answer"], gold, r1["latency_ms"], is_correct=is_correct)
+        print_result_row("Single LLM", r1["answer"], gold, r1["latency_ms"], is_correct=is_c1)
 
-        # Baseline 2 — self-consistency
         r2 = self_consistency_query(model_obj, tokenizer, processor, q, n=len(bee.personas))
-        is_correct = check_correctness(r2["answer"], gold, correct_list, bee.encoder)
-        results["self_consistency"]["correct"] += int(is_correct)
+        is_c2 = check_correctness(r2["answer"], gold, correct_list, bee.encoder)
+        results["self_consistency"]["correct"] += int(is_c2)
         results["self_consistency"]["latency"].append(r2["latency_ms"])
-        print_result_row("Self-consistency", r2["answer"], gold, r2["latency_ms"], is_correct=is_correct)
+        print_result_row("Self-consistency", r2["answer"], gold, r2["latency_ms"], is_correct=is_c2)
 
-        # BeeConsensus
-        t0  = time.time()
+        t0 = time.time()
         res = bee.query(q)
         elapsed = (time.time() - t0) * 1000
-        is_correct = check_correctness(res.final_answer, gold, correct_list, bee.encoder)
-        results["beeconsensus"]["correct"] += int(is_correct)
+        is_cb = check_correctness(res.final_answer, gold, correct_list, bee.encoder)
+        results["beeconsensus"]["correct"] += int(is_cb)
         results["beeconsensus"]["latency"].append(elapsed)
         results["beeconsensus"]["confidence"].append(res.confidence_score)
-        print_result_row(
-            f"BeeConsensus (r={res.rounds})",
-            res.final_answer, gold, elapsed,
-            confidence=res.confidence_score,
-            is_correct=is_correct,
-        )
-        if res.flagged_for_review:
-            print("       ⚠ Flagged for human review (low confidence)")
+        print_result_row(f"BeeConsensus (r={res.rounds})", res.final_answer, gold, elapsed, confidence=res.confidence_score, is_correct=is_cb)
 
-        # --- NEW: Append result to CSV immediately ---
         try:
-            import csv
             file_exists = os.path.isfile(checkpoint_file)
             with open(checkpoint_file, mode='a', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
                 if not file_exists:
-                    writer.writerow([
-                        "Question", "Target", 
-                        "Single LLM Answer", "Single LLM Correct", "Single LLM Latency",
-                        "Self-consistency Answer", "Self-consistency Correct", "Self-consistency Latency",
-                        "BeeConsensus Answer", "BeeConsensus Correct", "BeeConsensus Latency", "BeeConsensus Confidence"
-                    ])
-                writer.writerow([
-                    q, gold,
-                    r1["answer"], int(check_correctness(r1["answer"], gold, correct_list, bee.encoder)), r1["latency_ms"],
-                    r2["answer"], int(check_correctness(r2["answer"], gold, correct_list, bee.encoder)), r2["latency_ms"],
-                    res.final_answer, int(is_correct), elapsed, res.confidence_score
-                ])
+                    writer.writerow(["Question", "Target", "Single LLM Answer", "Single LLM Correct", "Single LLM Latency", "Self-consistency Answer", "Self-consistency Correct", "Self-consistency Latency", "BeeConsensus Answer", "BeeConsensus Correct", "BeeConsensus Latency", "BeeConsensus Confidence"])
+                writer.writerow([q, gold, r1["answer"], int(is_c1), r1["latency_ms"], r2["answer"], int(is_c2), r2["latency_ms"], res.final_answer, int(is_cb), elapsed, res.confidence_score])
         except Exception as e:
             print(f"[ERROR] Failed to save checkpoint: {e}")
 
-        # --- LIVE RUNNING TOTALS ---
-        current_n = len(results["beeconsensus"]["latency"])
-        if current_n > 0:
-            bee_acc = (results["beeconsensus"]["correct"] / current_n) * 100
-            sc_acc  = (results["self_consistency"]["correct"] / current_n) * 100
-            s_acc   = (results["single_llm"]["correct"] / current_n) * 100
-            print(f"     >> [LIVE ACCURACY] Bee: {bee_acc:.1f}% | Self-Con: {sc_acc:.1f}% | Single: {s_acc:.1f}% ({current_n} questions)")
+        cur_n = len(results["beeconsensus"]["latency"])
+        print(f"     >> [LIVE ACCURACY] Bee: {(results['beeconsensus']['correct']/cur_n*100):.1f}% | Self-Con: {(results['self_consistency']['correct']/cur_n*100):.1f}% | Single: {(results['single_llm']['correct']/cur_n*100):.1f}% ({cur_n} questions)")
 
-    # Summary
-    n = len(ds)
-    print("\n" + "="*60)
-    print("  SUMMARY (TruthfulQA)")
-    print("="*60)
-    print(f"  {'Method':<22} {'Accuracy':>10} {'Avg Latency':>14} {'Avg Conf':>10}")
-    print_separator()
-    for method, data in results.items():
-        acc     = (data["correct"] / n * 100) if n > 0 else 0
-        avg_lat = mean(data["latency"]) if data["latency"] else 0
-        conf_str = f"{mean(data['confidence']):.3f}" if data.get("confidence") else "  N/A "
-        print(f"  {method:<22} {acc:>9.1f}%  {avg_lat:>10.0f} ms  {conf_str:>8}")
-
-    print("\n  Evaluation complete.\n")
+    print_and_save_summary(results, summary_file)
     return results
 
-
-# ─────────────────────────────────────────────
-#  CLI entry point
-# ─────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(description="BeeConsensus Evaluation")
     parser.add_argument("--mode",      choices=["demo", "truthfulqa"], default="demo")
     parser.add_argument("--model_id",  default="meta-llama/Llama-3.1-8B-Instruct")
     parser.add_argument("--quorum",    type=float, default=0.60)
-    parser.add_argument("--openvino",  action="store_true", help="Use OpenVINO acceleration")
-    parser.add_argument("--dataset",   default="domenicrosati/TruthfulQA", help="HF Dataset ID")
-    parser.add_argument("--limit",     type=int, default=5, help="Limit number of samples")
-    parser.add_argument("--hf_token",  default=None, help="Hugging Face API token")
+    parser.add_argument("--openvino",  action="store_true")
+    parser.add_argument("--dataset",   default="domenicrosati/TruthfulQA")
+    parser.add_argument("--limit",     type=int, default=5)
+    parser.add_argument("--hf_token",  default=None)
     args = parser.parse_args()
 
-    bee = BeeConsensus(
-        model_id=args.model_id,
-        quorum_threshold=args.quorum,
-        verbose=True,
-        use_openvino=args.openvino,
-        hf_token=args.hf_token
-    )
-    
-    if args.mode == "demo":
-        run_demo(bee)
-    elif args.mode == "truthfulqa":
-        run_truthfulqa(bee, args.dataset, args.limit)
+    if args.mode == "truthfulqa":
+        checkpoint_file, summary_file = get_storage_paths()
+        results, processed_questions = load_checkpoint_results(checkpoint_file)
+        total_needed = args.limit if args.limit > 0 else 817
+        if len(processed_questions) >= total_needed and len(processed_questions) > 0:
+            print(f"\n[INFO] All {len(processed_questions)} questions already finished!")
+            print_and_save_summary(results, summary_file)
+            return
 
+    bee = BeeConsensus(model_id=args.model_id, quorum_threshold=args.quorum, verbose=True, use_openvino=args.openvino, hf_token=args.hf_token)
+    if args.mode == "demo": run_demo(bee)
+    elif args.mode == "truthfulqa": run_truthfulqa(bee, args.dataset, args.limit)
 
 if __name__ == "__main__":
     main()
