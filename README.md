@@ -80,7 +80,9 @@ python evaluate.py --mode truthfulqa --model_id "meta-llama/Llama-3.1-8B-Instruc
 | `--model_id` | `meta-llama/Llama-3.1-8B-Instruct` | Hugging Face model ID |
 | `--quorum` | `0.60` | Fraction of agents required for consensus (0.1 - 1.0) |
 | `--openvino` | `False` | Enable OpenVINO acceleration for Intel hardware |
+| `--dataset` | `domenicrosati/TruthfulQA` | Hugging Face dataset used in `truthfulqa` mode |
 | `--limit` | `5` | Maximum number of questions to evaluate |
+| `--hf_token` | `None` | Hugging Face access token (needed for gated models such as Llama-3.1) |
 
 ---
 
